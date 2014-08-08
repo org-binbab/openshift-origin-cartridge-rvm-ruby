@@ -1,0 +1,261 @@
+#!/bin/bash -e
+
+source $OPENSHIFT_CARTRIDGE_SDK_BASH
+source "${OPENSHIFT_RUBY_DIR}/lib/util"
+source "${OPENSHIFT_RUBY_DIR}/lib/ruby_context"
+
+HTTPD_CFG_DIR=${OPENSHIFT_RUBY_DIR}/etc/conf.d
+HTTPD_CFG_FILE=$OPENSHIFT_RUBY_DIR/etc/conf/httpd_nolog.conf
+HTTPD_PASSENV_FILE=${HTTPD_CFG_DIR}/passenv.conf
+HTTPD_PID_FILE=$OPENSHIFT_RUBY_DIR/run/httpd.pid
+RAILS_ENV=${RAILS_ENV:-production}
+
+# construct the configuration directives for httpd
+HTTPD_CMD_CONF="-C 'Include $OPENSHIFT_RUBY_DIR/etc/conf.d/*.conf' -f $HTTPD_CFG_FILE"
+for dir in /etc/openshift/cart.conf.d/httpd{,/ruby} ; do
+    [ -d $dir ] && HTTPD_CMD_CONF="$HTTPD_CMD_CONF -c 'Include $dir/*.conf'"
+done
+
+# Use a custom directory for Passenger's temp files to work around:
+# https://code.google.com/p/phusion-passenger/issues/detail?id=961
+#
+# The directory it creates automatically in /tmp has setuid which
+# triggers the bug when using graceful operations.
+[ -d /tmp/passenger ] || mkdir /tmp/passenger
+
+function start() {
+    if process_running 'httpd', $HTTPD_PID_FILE; then
+      if ruby_in_development_mode && httpd_in_development_mode; then
+        echo "Ruby cartridge in development mode, skipping start..."
+        return 0
+      else
+        update_rails_env
+      fi
+    fi
+    echo "Starting Ruby cartridge"
+    write_server_status ${HTTPD_CFG_DIR}/server-status.conf
+    mkdir -p ${OPENSHIFT_REPO_DIR}public
+    write_httpd_passenv $HTTPD_PASSENV_FILE
+    ensure_valid_httpd_process "$HTTPD_PID_FILE" "$HTTPD_CFG_FILE"
+    update_passenger_performance
+    # Force httpd into its own pgroup, as httpd is hard-coded to TERM everything in
+    # its pgroup during shutdown (even while foregrounded)
+    set -m
+    ruby_context "umask 002 &>/dev/null ; RAILS_ENV=${RAILS_ENV:-production} nohup /usr/sbin/httpd $HTTPD_CMD_CONF -D FOREGROUND |& /usr/bin/logshifter -tag ruby &"
+    set +m
+    [ "$?" == "0" ] && wait_for_pid_file $HTTPD_PID_FILE
+}
+
+function stop() {
+    if ruby_in_development_mode; then
+      if httpd_in_development_mode; then
+        echo "Ruby cartridge in development mode, skipping stop..."
+        return 0
+      fi
+    fi
+    echo "Stopping Ruby cartridge"
+    ensure_valid_httpd_pid_file "$HTTPD_PID_FILE" "$HTTPD_CFG_FILE"
+    if [ -f "$HTTPD_PID_FILE" ]; then
+      shutdown_httpd_graceful $HTTPD_PID_FILE
+    fi
+}
+
+function restart() {
+    echo "${1}ing Ruby cart"
+    mkdir -p ${OPENSHIFT_REPO_DIR}public
+    write_httpd_passenv $HTTPD_PASSENV_FILE
+    oo-erb ${OPENSHIFT_RUBY_DIR}conf/performance.conf.erb.hidden > $HTTPD_CFG_DIR/performance.conf
+    [ -d ${OPENSHIFT_REPO_DIR}/tmp ] && touch ${OPENSHIFT_REPO_DIR}/tmp/restart.txt
+    ensure_httpd_restart_succeed "$HTTPD_PID_FILE" "$HTTPD_CFG_FILE"
+    if [ -f "$HTTPD_PID_FILE" ]; then
+      httpd_pid=`cat "$HTTPD_PID_FILE" 2> /dev/null`
+      kill -HUP $httpd_pid
+    else
+      start
+    fi
+}
+
+function status() {
+   if output=$(curl http://$OPENSHIFT_RUBY_IP:$OPENSHIFT_RUBY_PORT/ &> /dev/null)
+   then
+      client_result "Application is running"
+   else
+      client_result "Application is either stopped or inaccessible"
+   fi
+}
+
+# Clean up any log files
+function tidy() {
+  client_message "Emptying ruby logs in dir: $OPENSHIFT_LOG_DIR"
+  shopt -s dotglob
+  rm -rf $OPENSHIFT_LOG_DIR/ruby.log*
+  rm -rf ${OPENSHIFT_RUBY_DIR}tmp/*
+}
+
+function pre-repo-archive() {
+  rm -rf ${OPENSHIFT_RUBY_DIR}/tmp/.bundle ${OPENSHIFT_RUBY_DIR}/tmp/vendor
+
+  # Backup .bundle and vendor unless force_clean_build
+  if ! force_clean_build_enabled_for_latest_deployment \
+    && [ -d ${OPENSHIFT_REPO_DIR}.bundle ] \
+    && [ -d ${OPENSHIFT_REPO_DIR}vendor/bundle ]
+  then
+    echo 'Saving away previously bundled RubyGems'
+    mv ${OPENSHIFT_REPO_DIR}.bundle ${OPENSHIFT_RUBY_DIR}/tmp/
+    mv ${OPENSHIFT_REPO_DIR}vendor ${OPENSHIFT_RUBY_DIR}/tmp/
+  fi
+}
+
+function build() {
+    echo "Building Ruby cartridge"
+    update-configuration $OPENSHIFT_RUBY_VERSION
+
+    if [ -d ${OPENSHIFT_RUBY_DIR}tmp/.bundle ]; then
+      echo 'Restoring previously bundled RubyGems'
+      echo 'NOTE: You can commit .openshift/markers/force_clean_build to force a clean bundle'
+
+      if [ -d ${OPENSHIFT_REPO_DIR}.bundle ]; then
+        echo 'ERROR: You need to remove the ".bundle" directory from your GIT repository.'
+        exit 1;
+      fi
+      mv $OPENSHIFT_RUBY_DIR/tmp/.bundle ${OPENSHIFT_REPO_DIR}
+
+      if [ -d ${OPENSHIFT_REPO_DIR}vendor ]; then
+        mv $OPENSHIFT_RUBY_DIR/tmp/vendor/bundle ${OPENSHIFT_REPO_DIR}vendor/
+      else
+        mv $OPENSHIFT_RUBY_DIR/tmp/vendor ${OPENSHIFT_REPO_DIR}
+      fi
+      rm -rf $OPENSHIFT_RUBY_DIR/tmp/.bundle $OPENSHIFT_RUBY_DIR/tmp/vendor
+    fi
+
+    # If a Gemfile is committed and it is modified, then bundle install
+    #
+    if [ -f ${OPENSHIFT_REPO_DIR}/Gemfile ]; then
+      if force_clean_build_enabled_for_latest_deployment; then
+        # Remove last Gemfile checksum file to force bundler to run.
+        rm -f ${OPENSHIFT_RUBY_DIR}tmp/.gemfile_md5sum
+      fi
+      if ! gemfile_is_modified; then
+        echo "NOTE: Skipping 'bundle install' because Gemfile is not modified."
+        return 0
+      fi
+      if ruby_in_development_mode; then
+        echo "NOTE: Skipping 'bundle install' because running in development mode."
+        return 0
+      fi
+      pushd ${OPENSHIFT_REPO_DIR} 1> /dev/null
+      SAVED_GIT_DIR=$GIT_DIR
+      unset GIT_DIR
+
+      # FIXME: This is a workaround for the bug in MySQL 5.5 SCL where the
+      #        libmysqlclient is not shipped with SCL and we need to manually
+      #        override the location of it for bundler.
+      #
+      export BUNDLE_BUILD__MYSQL2="--with-mysql-config=/usr/bin/mysql_config"
+      export BUNDLE_BUILD__MYSQL="--with-mysql-config=/usr/bin/mysql_config"
+
+      # You can tell bundler to skip installing certain gem group by using
+      # $ rhc env set BUNDLE_WITHOUT="group1 group2 ..."
+      #
+      if [ -z "${BUNDLE_WITHOUT}" ]; then
+        echo "bundle install --deployment --path ./app-root/repo/vendor/bundle"
+        if groups_in_gemfile ${OPENSHIFT_REPO_DIR}/Gemfile; then
+          echo "NOTE: You can prevent installing certain Gemfile group using: rhc env set BUNDLE_WITHOUT=groupname"
+        fi
+        ruby_context "bundle install --deployment"
+      else
+        echo "bundle install --deployment --without '${BUNDLE_WITHOUT}' --path ./app-root/repo/vendor/bundle"
+        ruby_context "bundle install --deployment --without '${BUNDLE_WITHOUT}'"
+      fi
+      export GIT_DIR=$SAVED_GIT_DIR
+      popd 1> /dev/null
+    fi
+}
+
+function deploy() {
+  if ruby_in_development_mode; then
+    echo "NOTE: The 'rake assets:precompile' is disabled when Ruby is in development mode."
+    return 0
+  fi
+  pushd ${OPENSHIFT_REPO_DIR} > /dev/null
+  if has_assets; then
+    ruby_with_nodejs_context "bundle exec rake assets:precompile"
+    echo "NOTE: To disable assets compilation use 'disable_asset_compilation' marker."
+  else
+    echo "Compilation of assets is disabled or assets not detected."
+  fi
+  popd > /dev/null
+}
+
+function post-deploy() {
+  if hot_deploy_enabled_for_latest_deployment; then
+    if [ -d "${OPENSHIFT_REPO_DIR}tmp" ]; then
+      echo "Hot deploy marker is present. Touching Passenger restart.txt to trigger redeployment."
+      touch ${OPENSHIFT_REPO_DIR}tmp/restart.txt
+    else
+      echo "WARNING: Hot deploy marker is present, but the 'tmp/' directory does not exists."
+    fi
+  fi
+}
+
+function threaddump() {
+  # Handle scaled (non-head) gears
+  if [ -t 0 ]; then
+      result=$(_threaddump $OPENSHIFT_GEAR_UUID)
+      if [ "$result" = "" ]; then
+          DATE=`date -u '+%Y%m%d'`
+          echo "The thread dump file will be available via: tail -f ${OPENSHIFT_LOG_DIR}/ruby*"
+      else
+          echo " $result"
+      fi
+      echo ""
+      exit
+  fi
+
+  result=$(_threaddump $OPENSHIFT_GEAR_UUID)
+
+  if [ "$result" = "" ]; then
+      DATE=`date -u '+%Y%m%d'`
+      client_result "Success"
+      client_result ""
+      # note bz 923405/921537 for why log file name is not more specific
+      client_result "The thread dump file will be available via: rhc tail ${OPENSHIFT_APP_NAME} -g ${OPENSHIFT_GEAR_UUID} -f ${OPENSHIFT_LOG_DIR}/ruby* -o '-n 250'"
+  else
+      client_result " $result"
+  fi
+
+}
+
+function _threaddump() {
+
+  if [ $# -ne 1 ]
+  then
+      echo "Usage: $0 UUID"
+      exit 1
+  fi
+
+  PID=$(ps -u $(id -u $1) -o pid,command | grep -v grep | grep 'Rack.*'$1 | awk 'BEGIN {FS=" "}{print $1}')
+
+  if [ -z "$PID" ]; then
+    echo "Unable to detect application PID. Check the application's availability by accessing http://${OPENSHIFT_GEAR_DNS}"
+  else
+    if ! kill -s ABRT $PID; then
+      echo "Failed to signal application. Please retry after restarting application and access it by its URL (http://${OPENSHIFT_GEAR_DNS})"
+    fi
+  fi
+}
+
+case "$1" in
+  start)             start ;;
+  stop)              stop ;;
+  restart | reload ) restart $1 ;;
+  status)            status ;;
+  tidy)              tidy ;;
+  pre-repo-archive)  pre-repo-archive ;;
+  build)             build ;;
+  deploy)            deploy ;;
+  post-deploy)       post-deploy ;;
+  threaddump)        threaddump ;;
+  update-configuration)   update-configuration $OPENSHIFT_RUBY_VERSION;;
+  *)                 exit 0
+esac

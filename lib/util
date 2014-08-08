@@ -1,0 +1,184 @@
+#!/bin/bash
+# Utility functions for use in the cartridge scripts.
+
+# BZ 1030873 - need nodejs context for bundle exec
+source "${OPENSHIFT_RUBY_DIR}/lib/ruby_context"
+
+function ruby_in_development_mode {
+  if [ "$RAILS_ENV" == "development" ]; then
+    return 0
+  else
+    return 1
+  fi
+}
+
+# When in development mode, the 'bundler install' is skipped
+# until developer touch the Gemfile/Gemfile.lock files, to
+# speed up deployment.
+#
+function update_gemfile_sum {
+  local gemfile_md5_file="${OPENSHIFT_RUBY_DIR}tmp/.gemfile_md5sum"
+  pushd $OPENSHIFT_REPO_DIR 1>/dev/null
+  [ -f Gemfile.lock ] && md5sum Gemfile.lock > "${gemfile_md5_file}"
+  popd 1>/dev/null
+}
+
+function update_rails_env {
+  if [ ! -z "${OPENSHIFT_RUBY_ENV}" ]; then
+    echo $OPENSHIFT_RUBY_ENV > "${OPENSHIFT_RUBY_DIR}tmp/rails_env"
+  else
+    echo $RAILS_ENV > "${OPENSHIFT_RUBY_DIR}tmp/rails_env"
+  fi
+}
+
+function groups_in_gemfile {
+  if grep -q "^group " "$1"; then
+    return 0
+  else
+    return 1
+  fi
+}
+
+# Apache is in development mode when the RAILS_ENV is set to the development.
+#
+function httpd_in_development_mode {
+  if ruby_in_development_mode; then
+    if [ ! -f "${OPENSHIFT_RUBY_DIR}tmp/rails_env" ]; then
+      current_rails_env="production"
+    else
+      current_rails_env=$(cat "${OPENSHIFT_RUBY_DIR}tmp/rails_env")
+    fi
+    if [ "$current_rails_env" == "production" ]; then
+      update_rails_env
+      return 1
+    fi
+  else
+    update_rails_env
+    return 0
+  fi
+}
+
+function gemfile_is_modified {
+
+  local gemfile_md5_file="${OPENSHIFT_RUBY_DIR}tmp/.gemfile_md5sum"
+
+  [ ! -f "${OPENSHIFT_REPO_DIR}Gemfile.lock" ] && return 0
+
+  if [ ! -f "${gemfile_md5_file}" ]; then
+    update_gemfile_sum
+    return 0
+  else
+    pushd $OPENSHIFT_REPO_DIR 1>/dev/null
+    md5sum --status --check "${gemfile_md5_file}"
+    is_modified=$?
+    popd 1>/dev/null
+
+    if [ "$is_modified" == "1" ]; then
+      # make sure we update the checksum!
+      update_gemfile_sum
+
+      return 0
+    fi
+
+    return 1
+  fi
+}
+
+function wait_for_stop {
+        pid=$1
+    for i in {1..300}
+    do
+        if `ps --pid $pid > /dev/null 2>&1`
+        then
+            # only print every second
+            [ $((100 % 10)) -eq 0 ] && echo "Waiting for stop to finish"
+            sleep .1
+        else
+            break
+        fi
+    done
+}
+
+function update-configuration {
+    case "$1" in
+      1.9)
+        echo -n "${GEM_HOME}/bin:" >$OPENSHIFT_RUBY_DIR/env/OPENSHIFT_RUBY_PATH_ELEMENT
+        dirname $(scl enable ruby193 "which ruby") >>$OPENSHIFT_RUBY_DIR/env/OPENSHIFT_RUBY_PATH_ELEMENT
+
+        local env_dir="${OPENSHIFT_RUBY_DIR}/env"
+        local ld_path=$(LD_LIBRARY_PATH="" scl enable ruby193 "printenv LD_LIBRARY_PATH")
+        set_env_var 'OPENSHIFT_RUBY_LD_LIBRARY_PATH_ELEMENT' $ld_path $env_dir
+
+        local man_path=$(MANPATH="" scl enable ruby193 "printenv MANPATH")
+        path_append $MANPATH $man_path >$OPENSHIFT_RUBY_DIR/env/MANPATH
+        ;;
+
+      2.0)
+        echo -n "${GEM_HOME}/bin:" >$OPENSHIFT_RUBY_DIR/env/OPENSHIFT_RUBY_PATH_ELEMENT
+        dirname $(scl enable ruby200 ror40 "which ruby") >>$OPENSHIFT_RUBY_DIR/env/OPENSHIFT_RUBY_PATH_ELEMENT
+
+        local env_dir="${OPENSHIFT_RUBY_DIR}/env"
+        local ld_path=$(LD_LIBRARY_PATH="" scl enable ruby200 ror40 "printenv LD_LIBRARY_PATH")
+        set_env_var 'OPENSHIFT_RUBY_LD_LIBRARY_PATH_ELEMENT' $ld_path $env_dir
+
+        local man_path=$(MANPATH="" scl enable ruby200 ror40 "printenv MANPATH")
+        path_append $MANPATH $man_path >$OPENSHIFT_RUBY_DIR/env/MANPATH
+        ;;
+
+      1.8)
+        rm -f \
+            $OPENSHIFT_RUBY_DIR/env/LD_LIBRARY_PATH \
+            $OPENSHIFT_RUBY_DIR/env/MANPATH
+        echo -n "${GEM_HOME}/bin" > $OPENSHIFT_RUBY_DIR/env/OPENSHIFT_RUBY_PATH_ELEMENT
+        ;;
+    esac
+}
+
+function update_passenger_performance {
+  oo-erb ${OPENSHIFT_RUBY_DIR}conf/performance.conf.erb.hidden > $HTTPD_CFG_DIR/performance.conf
+}
+
+# Check for all pre-requires for assets compilation.
+#
+function has_assets {
+  [ -f .openshift/markers/disable_asset_compilation ] && return 1
+
+  [ ! -f Gemfile ] && return 1
+  [ ! -f Rakefile ] && return 1
+  ! grep " rails " Gemfile.lock >/dev/null && return 1
+  ! grep " execjs " Gemfile.lock >/dev/null && return 1
+  ! ruby_with_nodejs_context "bundle exec 'rake -T'" | grep "assets:precompile" >/dev/null && return 1
+
+  return 0
+}
+
+function parse_args {
+    while :
+    do
+        case $1 in
+            -h | --help | -\?)
+                echo "usage: $0 [--version[=]<value>]"
+                exit 0
+                ;;
+            -v | --version)
+                version=$2     # You might want to check if you really got VERSION
+                shift 2
+                ;;
+            --version=*)
+                version=${1#*=}        # Delete everything up till "="
+                shift
+                ;;
+            --) # End of all options
+                shift
+                break
+                ;;
+            -*)
+                echo "WARN: Unknown option... Exiting: $1" >&2
+                exit 1
+                ;;
+            *)  # no more options. Stop while loop
+                break
+                ;;
+        esac
+    done
+}

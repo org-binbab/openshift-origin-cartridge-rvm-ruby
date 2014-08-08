@@ -1,0 +1,24 @@
+---
+locked_files:
+- bin/
+- bin/*
+- metadata/
+- metadata/*
+- hooks/
+- hooks/*
+- conf/
+- conf/performance.conf.erb.hidden
+- etc/
+- etc/conf/
+- etc/conf/*
+- etc/conf.d/
+- etc/conf.d/openshift.conf
+- env/
+- env/OPENSHIFT_RUBY_DIR
+- env/PASSENGER_TEMP_DIR
+processed_templates:
+- 'etc/conf.d/*.erb'
+setup_rewritten:
+# This can be safely removed in Sprint 46+
+- versions/1.8/template/.openshift
+- versions/1.9/template/.openshift

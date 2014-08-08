@@ -1,0 +1,42 @@
+LoadModule passenger_module /usr/lib64/httpd/modules/ruby193-mod_passenger.so
+<IfModule mod_passenger.c>
+   PassengerRoot NativelyPackaged
+   PassengerRuby /opt/rh/ruby193/root/usr/bin/ruby
+   PassengerSpawnMethod conservative
+</IfModule>
+
+
+ServerRoot "<%= ENV['OPENSHIFT_RUBY_DIR'] %>"
+DocumentRoot "<%= ENV['OPENSHIFT_REPO_DIR'] %>/public"
+Listen <%= ENV['OPENSHIFT_RUBY_IP'] %>:<%= ENV['OPENSHIFT_RUBY_PORT'] %>
+User <%= ENV['OPENSHIFT_GEAR_UUID'] %>
+Group <%= ENV['OPENSHIFT_GEAR_UUID'] %>
+<IfVersion >= 2.4>
+DefaultRuntimeDir "<%= "#{ENV['OPENSHIFT_RUBY_DIR']}/run"%>"
+</IfVersion>
+
+ErrorLog "|tee"
+CustomLog "|tee" combined
+
+PassengerUser <%= ENV['OPENSHIFT_GEAR_UUID'] %>
+
+# This has been hardcoded to port 80 due to BZ#984867
+#
+# Passenger will do a HEAD request against 127.0.0.1:PORT where the
+# port 8080 is closed in production.
+#
+PassengerPreStart http://<%= ENV['OPENSHIFT_APP_DNS'] %>:80/
+PassengerSpawnIPAddress <%= ENV['OPENSHIFT_RUBY_IP'] %>
+
+PassengerUseGlobalQueue off
+
+# These must be passed on this place to make sure we set the right Rails/Rack
+# environment
+PassEnv RAILS_ENV
+PassEnv RACK_ENV
+
+<Directory <%= ENV['OPENSHIFT_REPO_DIR'] %>/public/>
+    AllowOverride All
+    Options -Multiviews
+</Directory>
+

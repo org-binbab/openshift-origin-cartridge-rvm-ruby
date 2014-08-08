@@ -1,0 +1,38 @@
+#!/bin/bash -e
+
+if [[ -d /usr/lib64 ]]; then
+  _libdir=/usr/lib64
+else
+  _libdir=/usr/lib
+fi
+
+source $OPENSHIFT_CARTRIDGE_SDK_BASH
+source "${OPENSHIFT_RUBY_DIR}/lib/util"
+
+case "$1" in
+  -v|--version)
+    version="$2"
+esac
+
+# Copy the version specific files to ruby directory
+shopt -s dotglob
+for dir in template; do
+    mkdir -p $OPENSHIFT_RUBY_DIR/$dir
+    cp -Lr $OPENSHIFT_RUBY_DIR/versions/$version/$dir/* $OPENSHIFT_RUBY_DIR/$dir 
+done
+
+mkdir $OPENSHIFT_RUBY_DIR/tmp
+mkdir $OPENSHIFT_HOMEDIR/.passenger
+
+echo "$version" > $OPENSHIFT_RUBY_DIR/env/OPENSHIFT_RUBY_VERSION
+
+# Skip installing documentation for gems.
+# This will speed up the gem install/bundle install process
+#
+echo "gem: --no-document --no-ri --no-rdoc" > $OPENSHIFT_HOMEDIR/.gemrc
+
+update-configuration $version
+
+# Create additional directories required by RUBY and httpd
+ln -s ${_libdir}/httpd/modules $OPENSHIFT_RUBY_DIR
+ln -s /etc/httpd/conf/magic $OPENSHIFT_RUBY_DIR/etc/magic
