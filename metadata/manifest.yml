@@ -1,21 +1,18 @@
 ---
 Name: ruby
 Cartridge-Short-Name: RUBY
-Display-Name: Ruby 1.9
+Display-Name: Ruby 2.0 (RVM)
 Description: Ruby is a dynamic, reflective, general-purpose object-oriented programming
   language. Popular development frameworks include Ruby on Rails and Sinatra.
-Version: '1.9'
+Version: '2.0'
 Versions:
 - '2.0'
-- '1.9'
-- '1.8'
 License: Ruby BSDL
 License-Url: http://www.ruby-lang.org/en/about/license.txt
 Vendor: ruby.org
-Cartridge-Version: 0.0.21
-Compatible-Versions:
-- 0.0.20
-Cartridge-Vendor: redhat
+Cartridge-Version: 0.200.5
+Compatible-Versions: []
+Cartridge-Vendor: binarybabel
 Categories:
 - service
 - ruby
@@ -35,9 +32,9 @@ Scaling:
   Min: 1
   Max: -1
 Provides:
-- ruby-2.0
-- ruby-1.9
-- ruby
+  - ruby-2.0
+  - ruby
+  - ruby(version) = 2.0
 Endpoints:
 - Private-IP-Name: IP
   Private-Port-Name: PORT
@@ -59,16 +56,3 @@ Endpoints:
       health: true
 Additional-Control-Actions:
 - threaddump
-Version-Overrides:
-  '1.8':
-    Display-Name: Ruby 1.8
-    Provides:
-    - ruby-1.8
-    - ruby
-    - ruby(version) = 1.8
-  '2.0':
-    Display-Name: Ruby 2.0
-    Provides:
-    - ruby-2.0
-    - ruby
-    - ruby(version) = 2.0

@@ -1,13 +1,8 @@
 # Do not include this into the util file...
-# RHEL, Fedora18 and Fedora19 will overwrite this file to support invoking their Ruby versions
 
-# RHEL OpenShift Online supported versions
 function ruby_context {
-  case $OPENSHIFT_RUBY_VERSION in
-    1.8) eval $1 ;;
-    1.9) /usr/bin/scl enable ruby193 "$1" ;;
-    2.0) /usr/bin/scl enable ruby200 ror40 "$1" ;;
-  esac
+  [ -f "$RUBY_ENVIRONMENT" ] && source $RUBY_ENVIRONMENT
+  eval $1
 }
 
 # In case Ruby require NodeJS runtime (eg. compiling assets) detect
@@ -24,9 +19,6 @@ function ruby_with_nodejs_context {
     return 0
   fi
 
-  case $OPENSHIFT_RUBY_VERSION in
-    1.8) $cmd "$1" ;;
-    1.9) $cmd ruby193 "$1" ;;
-    2.0) $cmd ruby200 ror40 "$1" ;;
-  esac
+  [ -f "$RUBY_ENVIRONMENT" ] && source $RUBY_ENVIRONMENT
+  $cmd "$1"
 }
