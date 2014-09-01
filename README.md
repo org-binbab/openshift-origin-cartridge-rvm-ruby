@@ -6,8 +6,8 @@ This cartridge is documented in the [Cartridge Guide](http://openshift.github.io
 - Installed RVM Multi-User from sys-admin: `curl -sSL https://get.rvm.io | sudo bash -s stable`
 - sudo usermod -a -G rvm sys-admin
 - rvm list known
-- rvm install 2.0
-- gem install passenger
+- rvm install 2.1.2
+- gem install passenger bundler rake
 - passenger-install-apache2-module
 
 `````
@@ -16,4 +16,18 @@ This cartridge is documented in the [Cartridge Guide](http://openshift.github.io
      PassengerRoot /usr/local/rvm/gems/ruby-2.0.0-p481/gems/passenger-4.0.48
      PassengerDefaultRuby /usr/local/rvm/gems/ruby-2.0.0-p481/wrappers/ruby
    </IfModule>
+`````
+
+# Cartridge Update
+
+`````
+cd /usr/libexec/openshift/cartridges/ruby
+git fetch
+git reset --hard origin/master
+oo-admin-cartridge -a install -s .
+oo-admin-ctl-cartridge -c import-node --activate
+oo-admin-ctl-cartridge -c migrate
+oo-admin-ctl-cartridge -c deactivate --name OLD_VERSION
+oo-admin-ctl-cartridge -c clean
+oo-admin-upgrade upgrade-node --version NEW_VERSION
 `````

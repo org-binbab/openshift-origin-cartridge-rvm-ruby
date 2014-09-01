@@ -1,0 +1,34 @@
+LoadModule passenger_module <%= ENV['PASSENGER_MODULE'] %>
+
+<IfModule mod_passenger.c>
+   PassengerRoot <%= ENV['PASSENGER_ROOT'] %>
+   PassengerRuby <%= ENV['PASSENGER_RUBY'] %>
+   # As of Phusion Passenger 4.0, conservative spawning was renamed to direct
+   PassengerSpawnMethod direct
+</IfModule>
+
+ServerRoot "<%= ENV['OPENSHIFT_RUBY_DIR'] %>"
+DocumentRoot "<%= ENV['OPENSHIFT_REPO_DIR'] %>/public"
+Listen <%= ENV['OPENSHIFT_RUBY_IP'] %>:<%= ENV['OPENSHIFT_RUBY_PORT'] %>
+User <%= ENV['OPENSHIFT_GEAR_UUID'] %>
+Group <%= ENV['OPENSHIFT_GEAR_UUID'] %>
+<IfVersion >= 2.4>
+DefaultRuntimeDir "<%= ENV['OPENSHIFT_RUBY_DIR'] %>/run"
+</IfVersion>
+
+ErrorLog "|tee"
+CustomLog "|tee" combined
+
+PassengerUser <%= ENV['OPENSHIFT_GEAR_UUID'] %>
+PassengerPreStart http://<%= ENV['OPENSHIFT_RUBY_IP'] %>:<%= ENV['OPENSHIFT_RUBY_PORT'] %>/
+PassengerTempDir /tmp/passenger
+
+<% if ENV['RAILS_ENV'] == "development" %>
+PassengerLogLevel 1
+<% end %>
+
+<Directory <%= ENV['OPENSHIFT_REPO_DIR'] %>/public/>
+    AllowOverride All
+    Options -Multiviews
+</Directory>
+
