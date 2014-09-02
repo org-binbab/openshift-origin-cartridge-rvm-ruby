@@ -7,11 +7,10 @@ Description: Ruby is a dynamic, reflective, general-purpose object-oriented prog
 Version: '2.1.2'
 Versions:
 - '2.1.2'
-- '2.0'
 License: Ruby BSDL
 License-Url: http://www.ruby-lang.org/en/about/license.txt
 Vendor: ruby.org
-Cartridge-Version: 0.212.3
+Cartridge-Version: 0.212.4
 Compatible-Versions: []
 Cartridge-Vendor: binarybabel
 Categories:
