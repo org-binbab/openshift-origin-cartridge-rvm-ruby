@@ -31,3 +31,17 @@ oo-admin-ctl-cartridge -c deactivate --name OLD_VERSION
 oo-admin-ctl-cartridge -c clean
 oo-admin-upgrade upgrade-node --version NEW_VERSION
 `````
+
+# Passenger Update
+
+- rvm use 2.1.2
+- gem update passenger
+- passenger-install-apache2-module
+
+`````
+cd /var/lib/openshift
+sudo find . -name 'openshift.conf' -exec sed -i 's/4\.0\.50/4\.0\.53/' '{}' \;
+sudo find . -name 'PASSENGER_*' -exec sed -i 's/4\.0\.50/4\.0\.53/' '{}' \;
+`````
+
+Then restart all Ruby gears.
